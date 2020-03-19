@@ -74,12 +74,29 @@ export async function generateSql(params: Params): Promise<void> {
   // Find all of the struct declarations that have a DbTable annotation
   const dbTables: DbTable[]  = [];
 
-  forEachDecl(loadedAdl.modules, scopedDecl => {
-    if (scopedDecl.decl.type_.kind == 'struct_') {
-      const struct = scopedDecl.decl.type_;
-      const ann = getAnnotation(scopedDecl.decl.annotations, DB_TABLE);
+  forEachDecl(loadedAdl.modules, scopedDecl0 => {
+    if (scopedDecl0.decl.type_.kind == 'type_') {
+      if (scopedDecl0.decl.type_.value.typeExpr.typeRef.kind == 'reference') {
+        const typeRef = scopedDecl0.decl.type_.value.typeExpr.typeRef.value;
+        const scopedDecl1 = loadedAdl.allAdlDecls[typeRef.moduleName+"."+typeRef.name]
+
+        if (scopedDecl1.decl.type_.kind == 'struct_') {
+          const struct = scopedDecl1.decl.type_;
+          const ann = getAnnotation(scopedDecl1.decl.annotations, DB_TABLE);
+          if (ann != undefined) {
+            const name = getTableName(scopedDecl1);
+            const scopedDecl = scopedDecl1;
+            dbTables.push({scopedDecl, struct, ann, name});
+          }
+        }
+      }
+    }
+    if (scopedDecl0.decl.type_.kind == 'struct_') {
+      const struct = scopedDecl0.decl.type_;
+      const ann = getAnnotation(scopedDecl0.decl.annotations, DB_TABLE);
       if (ann != undefined) {
-        const name = getTableName(scopedDecl);
+        const name = getTableName(scopedDecl0);
+        const scopedDecl = scopedDecl0;
         dbTables.push({scopedDecl, struct, ann, name});
       }
     }
