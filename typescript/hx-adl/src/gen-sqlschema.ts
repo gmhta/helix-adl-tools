@@ -62,7 +62,8 @@ interface Template {
 
 export interface DbTable {
   scopedDecl: adlast.ScopedDecl;
-  struct: adlast.DeclType_Struct_;
+  struct0: adlast.DeclType_Struct_;
+  type0: adlast.DeclType_Type_|null;
   ann: {}|null;
   name: string;
 };
@@ -77,27 +78,30 @@ export async function generateSql(params: Params): Promise<void> {
   forEachDecl(loadedAdl.modules, scopedDecl0 => {
     if (scopedDecl0.decl.type_.kind == 'type_') {
       if (scopedDecl0.decl.type_.value.typeExpr.typeRef.kind == 'reference') {
-        const typeRef = scopedDecl0.decl.type_.value.typeExpr.typeRef.value;
-        const scopedDecl1 = loadedAdl.allAdlDecls[typeRef.moduleName+"."+typeRef.name]
-
+        // const typeRef = scopedDecl0.decl.type_.value.typeExpr.typeRef.value;
+        const scopedDecl1 =loadedAdl.resolver(scopedDecl0.decl.type_.value.typeExpr.typeRef.value)
+        // const scopedDecl1 = loadedAdl.allAdlDecls[typeRef.moduleName+"."+typeRef.name]
+        const type0 = scopedDecl0.decl.type_
         if (scopedDecl1.decl.type_.kind == 'struct_') {
-          const struct = scopedDecl1.decl.type_;
-          const ann = getAnnotation(scopedDecl1.decl.annotations, DB_TABLE);
+          const struct0 = scopedDecl1.decl.type_;
+          const ann = getAnnotation(scopedDecl0.decl.annotations, DB_TABLE);
+          // console.error("xxx" , scopedDecl0.decl.type_.value.typeExpr.typeRef, scopedDecl1)
           if (ann != undefined) {
             const name = getTableName(scopedDecl1);
             const scopedDecl = scopedDecl1;
-            dbTables.push({scopedDecl, struct, ann, name});
+            dbTables.push({scopedDecl, struct0, type0, ann, name});
           }
         }
       }
     }
     if (scopedDecl0.decl.type_.kind == 'struct_') {
-      const struct = scopedDecl0.decl.type_;
+      const struct0 = scopedDecl0.decl.type_;
       const ann = getAnnotation(scopedDecl0.decl.annotations, DB_TABLE);
       if (ann != undefined) {
         const name = getTableName(scopedDecl0);
         const scopedDecl = scopedDecl0;
-        dbTables.push({scopedDecl, struct, ann, name});
+        const type0 = null;
+        dbTables.push({scopedDecl, struct0, type0, ann, name});
       }
     }
   });
@@ -141,9 +145,9 @@ async function generateSqlSchema(params: Params, loadedAdl: LoadedAdl, dbTables:
     if (withIdPrimaryKey) {
       lines.push({code: `id ${params.dbProfile.idColumnType} not null`});
     }
-    for(const f of t.struct.value.fields) {
+    for(const f of t.struct0.value.fields) {
       const columnName = getColumnName(f);
-      const columnType = getColumnType(loadedAdl.resolver, f, params.dbProfile);
+      const columnType = getColumnType(loadedAdl.resolver, f, params.dbProfile, t.type0);
       lines.push({
         code: `${columnName} ${columnType.sqltype}`,
         comment: typeExprToStringUnscoped(f.typeExpr),
@@ -154,7 +158,7 @@ async function generateSqlSchema(params: Params, loadedAdl: LoadedAdl, dbTables:
     }
 
     function findColName(s: string):string {
-      for(const f of t.struct.value.fields) {
+      for(const f of t.struct0.value.fields) {
         if (f.name == s) {
           return getColumnName(f);
         }
@@ -227,7 +231,7 @@ function getTableName(scopedDecl: adlast.ScopedDecl): string {
 /**
  *  Returns the singular primary key for the table
  */
-function getPrimaryKey(scopedDecl: adlast.ScopedDecl): string {
+function getPrimaryKey(scopedDecl: adlast.ScopedDecl, type0: adlast.DeclType_Type_|null): string {
   const ann = getAnnotation(scopedDecl.decl.annotations, DB_TABLE);
   if (ann && ann['withIdPrimaryKey']) {
     return "id";
@@ -235,6 +239,7 @@ function getPrimaryKey(scopedDecl: adlast.ScopedDecl): string {
   if (ann && ann["withPrimaryKey"] && ann["withPrimaryKey"].length == 1) {
     return ann["withPrimaryKey"][0];
   }
+  console.error("xx", type0?.value.typeExpr.typeRef)
   throw new Error(`No singular primary key for ${scopedDecl.decl.name}`);
   return "??";
 }
@@ -274,7 +279,7 @@ interface ColumnType {
 };
 
 
-function getColumnType(resolver: adl.DeclResolver, field: adlast.Field,  dbProfile: DbProfile): ColumnType {
+function getColumnType(resolver: adl.DeclResolver, field: adlast.Field,  dbProfile: DbProfile, type0: adlast.DeclType_Type_|null): ColumnType {
   const ann = getAnnotation(field.annotations, DB_COLUMN_TYPE);
   const annctype: string | undefined = typeof ann === "string" ? ann : undefined;
   
@@ -285,16 +290,18 @@ function getColumnType(resolver: adl.DeclResolver, field: adlast.Field,  dbProfi
   if(dtype.kind == 'Nullable' ||
      dtype.kind == 'Reference' && scopedNamesEqual(dtype.refScopedName, MAYBE)
     ) {
+      console.error("A", typeExpr.parameters[0])
     return {
       sqltype: annctype || getColumnType1(resolver, typeExpr.parameters[0], dbProfile),
-      fkey: getForeignKeyRef(resolver, typeExpr.parameters[0])
+      fkey: getForeignKeyRef(resolver, typeExpr.parameters[0], type0)
     };
   }
 
+  console.error("B", typeExpr, type0)
   // For all other types, the column will not allow nulls
   return {
     sqltype: (annctype || getColumnType1(resolver, typeExpr, dbProfile)) + " not null",
-    fkey: getForeignKeyRef(resolver, typeExpr)
+    fkey: getForeignKeyRef(resolver, typeExpr, type0)
   };
 }
 
@@ -331,14 +338,14 @@ function getColumnType1(resolver: adl.DeclResolver, typeExpr: adlast.TypeExpr, d
   }
 }
 
-function getForeignKeyRef(resolver: adl.DeclResolver, typeExpr0: adlast.TypeExpr): {table:string, column:string} | undefined {
+function getForeignKeyRef(resolver: adl.DeclResolver, typeExpr0: adlast.TypeExpr, type0: adlast.DeclType_Type_|null): {table:string, column:string} | undefined {
   const typeExpr = expandTypes(resolver, typeExpr0, {expandTypeAliases:true});
   const dtype = decodeTypeExpr(typeExpr);
   if (dtype.kind == 'Reference' && scopedNamesEqual(dtype.refScopedName, DB_KEY)) {
     const param0 = dtype.parameters[0];
     if (param0.kind == 'Reference') {
       const decl = resolver(param0.refScopedName);
-      return {table:getTableName(decl), column:getPrimaryKey(decl)};
+      return {table:getTableName(decl), column:getPrimaryKey(decl, type0)};
     }
   }
   return undefined;
